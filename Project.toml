@@ -1,0 +1,4 @@
+name = "MassChangeRepresentations"
+uuid = "89d3dff5-bba8-441c-bda7-d5d50137d897"
+authors = ["Andreas Kvas <kvas@tugraz.at>"]
+version = "0.1.0"
