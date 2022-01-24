@@ -1,8 +1,11 @@
 module MassChangeRepresentations
 
 include("data.jl")
-include("spherical_harmonics.jl")
+include("constants.jl")
+include("kernels.jl")
 include("grids.jl")
-const lovenumbers_ce, lovenumbers_cm = import_love_numbers()
+include("spherical_harmonics.jl")
+
+
 
 end # module

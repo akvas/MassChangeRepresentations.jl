@@ -1,33 +1,39 @@
 using GeographicLib
 using NearestNeighbors
-using Distances
 using StaticArrays
 using PyCall
 using Graphs
 using Meshes
 using LinearAlgebra
 using NLopt
+import Distances.Metric
+using QuadGK
 
 
 const spatial = PyNULL()
-
+const healpy = PyNULL()
 function __init__()
     copy!(spatial, pyimport_conda("scipy.spatial", "scipy"))
+    copy!(healpy, pyimport_conda("healpy", "healpy"))
 end
 
 const Point = SVector{3, Float64}
 const LonLat = SVector{2, Float64}
+const SphericalCoordinates = SVector{3, Float64}
 
-norm(p) = sqrt(p[1]^2 + p[2]^2 + p[3]^2)
+inner(p1::Point, p2::Point) = p1[1]*p2[1] + p1[2]*p2[2] + p1[3]*p2[3]
+radius(p) = sqrt(p[1]*p[1] + p[2]*p[2] + p[3]*p[3])
+cosangle(p::Point, q::Point) = inner(p, q) / (radius(p) * radius(q))
+angle(p::Point, q::Point) = acos(cosangle(p, q))
+
 
 function normalize!(p)
-    n = norm(p)
-    p /= n
-    return n
+    p /= radius(p)
+    return p
 end
 
 function normalize(p)
-    p / norm(p)
+    p / radius(p)
 end
 
 abstract type Grid end
@@ -85,14 +91,14 @@ function (dist::ApproximateEllipsoidalDistance)(x, y)
     dist.semimajoraxis * (sigma - 0.5 * dist.flattening * (X + Y))
 end
 
-function GeographicGrid(parallel_count, a=6378137.0, f=1/298.257223563)
+function GeographicGrid(parallel_count, a=Constants.WGS84.semimajor_axis, f=Constants.WGS84.flattening)
     dlat = pi / parallel_count
     meridians = collect(range(-pi + dlat * 0.5, stop=pi - dlat * 0.5, length=2 * parallel_count))
     parallels = collect(range(pi/2 - dlat * 0.5, stop=-pi/2 + dlat * 0.5, length=parallel_count))
     RegularGrid(parallels, meridians, a, f)
 end
 
-function ReuterGrid(parallel_count, a=6378137.0, f=1/298.257223563)
+function ReuterGrid(parallel_count, a=Constants.WGS84.semimajor_axis, f=Constants.WGS84.flattening)
     dlat = pi / parallel_count
 
     longitude = Vector{Float64}(undef, 1)
@@ -100,12 +106,10 @@ function ReuterGrid(parallel_count, a=6378137.0, f=1/298.257223563)
 
     longitude[1] = 0
     latitude[1] = 0.5 * pi
+    for beta in range(0.5 * pi - dlat, -0.5 * pi + dlat, parallel_count - 1)
 
-    for k in 2:parallel_count
-        theta = (k - 1) * dlat
-
-        lat = authalic2geodetic(0.5 * pi - theta, f)
-        meridian_count = floor(Int64, 2 * pi / acos( (cos(dlat) - cos(theta)^2)/sin(theta)^2))
+        lat = authalic2geodetic(beta, f)
+        meridian_count = floor(Int64, 2 * pi / acos( (cos(dlat) - sin(beta)^2)/cos(beta)^2))
         meridian_longitude = Vector{Float64}(undef, meridian_count)
         meridian_latitude = fill(lat, meridian_count)
         for i in 1:meridian_count
@@ -120,7 +124,91 @@ function ReuterGrid(parallel_count, a=6378137.0, f=1/298.257223563)
     IrregularGrid(longitude, latitude, a, f)
 end
 
-function GeodesicGrid(level, a=6378137.0, f=1/298.257223563)
+function HEALPix(Nside, a=Constants.WGS84.semimajor_axis, f=Constants.WGS84.flattening)
+    nsidelog2 = round(Int, log2(Nside))
+    (2^nsidelog2 == Nside) || throw(DomainError(Nside, "Nside must be an integer power of two"))
+
+    npoints = 12 * Nside^2
+
+    longitude = Vector{Float64}(undef, npoints)
+    latitude = Vector{Float64}(undef, npoints)
+
+    for k in 1:2*Nside*(Nside - 1)
+        i = floor(Int, sqrt(k / 2 - sqrt(floor(k / 2)))) + 1
+        j = k - 2*i * (i - 1)
+        lon = (Float64(j) - 0.5) * pi / (2i)
+        latitude[k], longitude[k] = asin(1 - i^2 / (3*Nside^2)), atan(sin(lon), cos(lon))
+    end
+    for k in 2*Nside*(Nside - 1)+1:2*Nside * (5*Nside + 1)
+        i = floor(Int, (k - 2*Nside*(Nside - 1) - 1) / (4*Nside)) + Nside
+        j = Int(mod(k - 2*Nside*(Nside - 1) - 1, 4*Nside)) + 1
+        lon = (Float64(j) - 0.5 * (1 + mod(Float64(i + Nside), 2))) * pi / (2*Nside)
+        latitude[k], longitude[k] = asin((2*Nside - i) / (1.5 * Nside)),  atan(sin(lon), cos(lon))
+    end
+    for k in 2*Nside * (5*Nside + 1)+1:npoints
+        i = floor(Int, sqrt((npoints - k + 1)/2 - sqrt(floor((npoints - k + 1)/2)))) + 1
+        j = Int(4 * i + 1 - (npoints - k + 1 - 2i * (i - 1)))
+        lon = (Float64(j) - 0.5) * pi / (2i)
+        latitude[k], longitude[k] = asin(-1 + i^2 / (3*Nside^2)), atan(sin(lon), cos(lon))
+    end
+    IrregularGrid(longitude, authalic2geodetic.(latitude, f), a, f)
+end
+
+function subdivideedge(p1, p2, level)
+    step_angle = acos(dot(p1, p2)) / (level + 1)
+    vec = normalize(cross(cross(p1, p2), p1))
+
+    return [cos(i * step_angle) * p1 + sin(i * step_angle) * vec for i in 1:level]
+end
+
+function subdividetriangle(p1, p2, p3, level)
+
+    edge12 = subdivideedge(p1, p2, level)
+    edge23 = subdivideedge(p2, p3, level)
+    edge31 = subdivideedge(p3, p1, level)
+
+    p = Point[]
+    for i in 1:level-1
+        for k in 0:i-1
+            level - i + k + 1
+            e13 = cross(edge12[i + 1], edge31[level - i])
+            e12 = cross(edge12[i - k], edge23[level - i + k + 1])
+            e23 = cross(edge23[k + 1], edge31[level - k])
+
+            v1 = cross(e13, e12)
+            v2 = cross(e23, e13)
+            v3 = cross(e23, e12)
+            append!(p, [Point(-normalize(normalize(v1) + normalize(v2) + normalize(v3)))])
+        end
+    end
+    return p
+end
+
+function HierachicalTriangularMesh(level, a=Constants.WGS84.semimajor_axis, f=Constants.WGS84.flattening)
+
+    vertices = [Point(0, 0, 1), Point(1, 0, 0), Point(0, 1, 0), Point(-1, 0, 0), Point(0, -1, 0), Point(0, 0, -1)]
+    triangles = [[1, 5, 2], [2, 5, 3], [3, 5, 4], [4, 5, 1], [1, 0, 4], [4, 0, 3], [3, 0, 2], [2, 0, 1]]
+    edges = [[1, 5], [5, 2], [2, 1], [5, 3], [3, 2], [3, 5], [5, 4], [4, 3], [1, 4], [1, 0], [0, 4], [0, 3], [0, 2], [0, 1]]
+
+    for k in 1:length(edges)
+        append!(vertices, subdivideedge(vertices[edges[k][1]+1], vertices[edges[k][2]+1], level))
+    end
+
+    for k in 1:length(triangles)
+       append!(vertices, subdividetriangle(vertices[triangles[k][1]+1], vertices[triangles[k][2]+1], vertices[triangles[k][3]+1], level))
+    end
+
+    ll = Matrix{Float64}(undef, length(vertices), 2)
+    for k in 1:length(vertices)
+        ll[k, 1] = atan(vertices[k][2], vertices[k][1])
+        ll[k, 2] = -authalic2geodetic(atan(vertices[k][3], sqrt(vertices[k][1]^2+vertices[k][2]^2)), f)
+        # ll[k, 2] = -geocentric2geodetic(pi*0.5-atan(sqrt(vertices[k][1]^2+vertices[k][2]^2),vertices[k][3]), f)
+    end
+    ll = sortslices(ll[:, end:-1:1], dims=1)[:, end:-1:1]
+    IrregularGrid(ll[:, 1], -ll[:, 2], a, f)
+end
+
+function GeodesicGrid(level, a=Constants.WGS84.semimajor_axis, f=Constants.WGS84.flattening)
 
     triangles = [[0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 5], [0, 5, 1], [2, 1, 6], [3, 2, 7], [4, 3, 8],
     [5, 4, 9], [1, 5, 10], [6, 7, 2], [7, 8, 3], [8, 9, 4], [9, 10, 5], [10, 6, 1],
@@ -142,36 +230,6 @@ function GeodesicGrid(level, a=6378137.0, f=1/298.257223563)
     ll = LonLat.(lons, lats)
     vertices = geodetic2point.(ll, 0, 1, 0)
 
-    function subdivideedge(p1, p2, level)
-        step_angle = acos(dot(p1, p2)) / (level + 1)
-        vec = normalize(cross(cross(p1, p2), p1))
-
-        return [cos(i * step_angle) * p1 + sin(i * step_angle) * vec for i in 1:level]
-    end
-
-    function subdividetriangle(p1, p2, p3, level)
-
-        edge12 = subdivideedge(p1, p2, level)
-        edge23 = subdivideedge(p2, p3, level)
-        edge31 = subdivideedge(p3, p1, level)
-
-        p = Point[]
-        for i in 1:level-1
-            for k in 0:i-1
-                level - i + k + 1
-                e13 = cross(edge12[i + 1], edge31[level - i])
-                e12 = cross(edge12[i - k], edge23[level - i + k + 1])
-                e23 = cross(edge23[k + 1], edge31[level - k])
-
-                v1 = cross(e13, e12)
-                v2 = cross(e23, e13)
-                v3 = cross(e23, e12)
-                append!(p, [Point(-normalize(normalize(v1) + normalize(v2) + normalize(v3)))])
-            end
-        end
-        return p
-    end
-
     for k in 1:length(edges)
         append!(vertices, subdivideedge(vertices[edges[k][1]+1], vertices[edges[k][2]+1], level))
     end
@@ -183,11 +241,52 @@ function GeodesicGrid(level, a=6378137.0, f=1/298.257223563)
     ll = Matrix{Float64}(undef, length(vertices), 2)
     for k in 1:length(vertices)
         ll[k, 1] = atan(vertices[k][2], vertices[k][1])
-        ll[k, 2] = -authalic2geodetic(pi*0.5-atan(sqrt(vertices[k][1]^2+vertices[k][2]^2),vertices[k][3]), f)
+        ll[k, 2] = -authalic2geodetic(atan(vertices[k][3], sqrt(vertices[k][1]^2+vertices[k][2]^2)), f)
         # ll[k, 2] = -geocentric2geodetic(pi*0.5-atan(sqrt(vertices[k][1]^2+vertices[k][2]^2),vertices[k][3]), f)
     end
     ll = sortslices(ll[:, end:-1:1], dims=1)[:, end:-1:1]
     IrregularGrid(ll[:, 1], -ll[:, 2], a, f)
+end
+
+function SpiralGrid(resolution, a=Constants.WGS84.semimajor_axis, f=Constants.WGS84.flattening)
+
+    function intfun(a, R, c)
+        R * sqrt(1 + c^2 * sin(a)^2)
+    end
+
+    function optfun(x, grad, sk, R, c)
+        I, _ = quadgk((a) -> intfun(a, R, c), 0, x[1])
+        abs(sk - I)
+    end
+
+    R = authalicradius(a, f)
+    c = R * pi / resolution * 2
+    S = quadgk((a) -> intfun(a, R, c), 0, pi)[1]
+    P = ceil(S / resolution) + 1
+    s = S / P
+    point_count = Int64(P) + 1
+
+    opt = Opt(:LN_COBYLA, 1)
+
+    thetas = Vector{Float64}(undef, point_count)
+    thetas[1] = 0
+    for (k, sk) in enumerate(s:s:S-s)
+        min_objective!(opt, (x,grad) -> optfun(x,grad,sk,R,c))
+        maxeval!(opt, 100)
+        ftol_abs!(opt, 0.1)
+        _, minx, _ = optimize(opt, [thetas[k]])
+        thetas[k+1] = minx[1]
+    end
+    thetas[end] = pi
+
+    lons = Vector{Float64}(undef, point_count)
+    lats = Vector{Float64}(undef, point_count)
+
+    for k in 1:point_count
+        lats[k] = authalic2geodetic(pi/2 - thetas[k], f)
+        lons[k] = atan(sin(c*thetas[k]), cos(c*thetas[k]))
+    end
+    IrregularGrid(lons, lats, a, f)
 end
 
 function lonlat(grid::Grid)
@@ -209,6 +308,45 @@ end
 function points(grid::Grid)
     ll = lonlat(grid)
     geodetic2point.(ll, 0, grid.semimajoraxis, grid.flattening)
+end
+
+function areaweights(grid::Grid)
+    fill(4*pi/pointcount(grid), pointcount(grid))
+end
+
+function computearea(surfacemesh, a, f)
+    g = Geodesic(a, f)
+
+    areas = Vector{Float64}(undef, length(elements(surfacemesh)))
+    for (k, e) in enumerate(Meshes.elements(surfacemesh))
+        p = GeographicLib.Polygon(g)
+        for v in Meshes.vertices(e)
+            ll, _ = point2geodetic(v.coords, a, f)
+            GeographicLib.add_point!(p, ll[1] * 180 / pi, ll[2] * 180 / pi)
+        end
+        _, _, areas[k] = GeographicLib.properties(p)
+    end
+    return areas
+end
+
+function areaweights(grid::RegularGrid)
+
+    lonedges = vcat(-pi, grid.meridians[1:end-1] + diff(grid.meridians).*0.5, pi)
+    latedges = geodetic2authalic.(vcat(0.5*pi, grid.parallels[1:end-1] + diff(grid.parallels).*0.5, -0.5*pi), Ref(grid.flattening))
+    #latedges = vcat(0.5*pi, grid.parallels[1:end-1] + diff(grid.parallels).*0.5, -0.5*pi)
+
+    vec(diff(lonedges).*transpose(2*sin.(abs.(diff(latedges)*0.5)).*cos.(grid.parallels)))
+end
+
+function toirregular(grid::RegularGrid)
+    ll = lonlat(grid)
+    lons = Vector{Float64}(undef, length(ll))
+    lats = Vector{Float64}(undef, length(ll))
+    for k in 1:length(ll)
+        lons[k] = ll[k][1]
+        lats[k] = ll[k][2]
+    end
+    IrregularGrid(lons, lats, grid.semimajoraxis, grid.flattening)
 end
 
 function nn(grid, points)
@@ -233,7 +371,7 @@ function graph(grid)
     return g
 end
 
-function mesh(grid)
+function mesh(grid::Grid)
     pts = points(grid)
     py = spatial.ConvexHull(pts)
 
@@ -251,7 +389,27 @@ function mesh(grid)
     Meshes.SimpleMesh(Meshes.Point.(pts), connec)
 end
 
-function voronoi(grid)
+# function mesh(grid::RegularGrid)
+#     pts = points(grid)
+
+#     tuples = Vector{Tuple}(undef, length(pts))
+#     M = length(grid.meridians)
+#     for m in 1:M
+#         tuples[m] = (m>1 ? m-1 : M, m<M ? m+1 : 1, M + m)
+#     end
+#     for p in 2:length(grid.parallels)-1
+#         for m in 1:M
+#             tuples[(p-1)*M+m] = (m>1 ? m-1 : M, m<M ? m+1 : 1, M + m, m-M).+(p-1)*M
+#         end
+#     end
+#     for m in 1:M
+#         tuples[(length(grid.parallels)-1)*M+m] = (m>1 ? m-1 : M, m<M ? m+1 : 1, m - M).+(length(grid.parallels)-1)*M
+#     end
+#     connec = Meshes.connect.(tuples, Meshes.Ngon)
+#     Meshes.SimpleMesh(Meshes.Point.(pts), connec)
+# end
+
+function surfaceelements(grid::Grid)
 
     metric = ApproximateEllipsoidalDistance(grid.semimajoraxis, grid.flattening)
     opt = Opt(:LN_COBYLA, 2)
@@ -308,6 +466,36 @@ function voronoi(grid)
     Meshes.SimpleMesh([Meshes.Point(p[1], p[2], p[3]) for p in centroids], connec)
 end
 
+function surfaceelements(grid::RegularGrid)
+
+    lonedges = vcat(-pi, grid.meridians[1:end-1] + diff(grid.meridians).*0.5)
+    latedges = grid.parallels[1:end-1] + diff(grid.parallels).*0.5
+    P = length(grid.parallels)
+    M = length(grid.meridians)
+    vertices = Vector{Meshes.Point3}(undef, 2 + (P-1) * M)
+    vertices[1] = Meshes.Point(geodetic2point(LonLat(0, 0.5*pi), 0, grid.semimajoraxis, grid.flattening))
+    for k in 0:P-2
+        ll = LonLat.(lonedges, Ref(latedges[k+1]))
+        vertices[k * M + 2:(k + 1) * M+1] = geodetic2point.(ll, 0, grid.semimajoraxis, grid.flattening)
+    end
+    vertices[end] = Meshes.Point(geodetic2point(LonLat(0, -0.5*pi), 0, grid.semimajoraxis, grid.flattening))
+
+    tuples = Vector{Tuple}(undef, pointcount(grid))
+    for m in 1:M
+        tuples[m] = (1, m+1, m<M ? m+2 : 2)
+    end
+    for p in 2:length(grid.parallels)-1
+        for m in 1:M
+            tuples[(p-1)*M+m] = (m+1, m+1+M, (m<M ? m+2 : 2)+M, m<M ? m+2 : 2).+(p-2)*M
+        end
+    end
+    for m in 1:M
+        tuples[(length(grid.parallels)-1)*M+m] = (m+1+(P-2)*M, length(vertices), ((m<M ? m+2 : 2)+(P-2)*M))
+    end
+    connec = Meshes.connect.(tuples, Meshes.Ngon)
+    Meshes.SimpleMesh(vertices, connec)
+end
+
 function geodetic2point(lonlat, height::Number, a, f)
 
     e2 = f * (2 - f)
@@ -321,7 +509,7 @@ function geodetic2point(lonlat, height::Number, a, f)
 end
 
 function point2spherical(point)
-    r = norm(point)
+    r = radius(point)
     colat = atan(sqrt(point[1]^2 + point[2]^2), point[3])
     lon = atan(point[2], point[1])
     return r, colat, lon
@@ -374,8 +562,19 @@ function authalic2geodetic(beta, f)
     (48017/29937600 * e2^5) * sin(10 * beta)
 end
 
-function geodetic2authalic(latitude, f)
+function authalicradius(a, f)
     if iszero(f)
+        return a
+    end
+
+    e = sqrt(f * (2 - f))
+    b = a * (1 - f)
+
+    return sqrt((a^2 + b^2 / e * log((a/b)*(1+e)))*0.5)
+end
+
+function geodetic2authalic(latitude, f)
+    if iszero(f) || iszero(abs(latitude) - pi/2)
         return latitude
     end
 

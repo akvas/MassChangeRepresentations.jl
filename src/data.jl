@@ -8,8 +8,9 @@ end
 
 datadir = joinpath(dirname(pathof(MassChangeRepresentations)), "..", "data")
 
-function import_love_numbers(maximum_degree=5540)
+function import_love_numbers()
     fh = GZip.open(joinpath(datadir, "ak135-LLNs-complete.dat.gz"))
+    maximum_degree = 46341
     readline(fh)
     kn = Vector{Float64}(undef, maximum_degree+1)
     hn = Vector{Float64}(undef, maximum_degree+1)
