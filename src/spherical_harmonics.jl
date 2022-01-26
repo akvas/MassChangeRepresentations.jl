@@ -6,7 +6,8 @@ export recursionfactors, legendrefunctions!, legendrefunctions, sphericalharmoni
     recursionfactors(maximum_degree)
 
 Compute recursion factors for associated Legendre functions and spherical harmonics.
-The factors are stored in a matrix of size (maximum_degree+1, maximum_degree+1)
+
+The factors are stored in a matrix of size ``n_\\text{max}+1 \\times n_\\text{max}+1``.
 
 """
 function recursionfactors(maximum_degree)
@@ -126,12 +127,10 @@ function legendrefunctions!(t::Number, factors, Pnm)
     return legendrefunctions!(p, factors, 1.0, Pnm)
 end
 
-
 function legendrefunctions(t::Number, factors)
     Pnm = Matrix{Float64}(undef, size(factors))
     legendrefunctions!(t, factors, Pnm)
 end
-
 
 function sphericalharmonics(p, factors, reference_radius)
     Ynm = Matrix{Float64}(undef, size(factors))
@@ -390,7 +389,6 @@ function zerodegrees!(coefficients::PotentialCoefficients, degree_range)
         end
     end
 end
-
 
 function Base.:display(a::PotentialCoefficients)
     println("GM ", a.GM)
