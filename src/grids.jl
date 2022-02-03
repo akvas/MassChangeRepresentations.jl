@@ -449,25 +449,25 @@ function mesh(grid::Grid)
     Meshes.SimpleMesh(Meshes.Point.(pts), connec)
 end
 
-# function mesh(grid::RegularGrid)
-#     pts = points(grid)
+function mesh(grid::RegularGrid)
+    pts = points(grid)
 
-#     tuples = Vector{Tuple}(undef, length(pts))
-#     M = length(grid.meridians)
-#     for m in 1:M
-#         tuples[m] = (m>1 ? m-1 : M, m<M ? m+1 : 1, M + m)
-#     end
-#     for p in 2:length(grid.parallels)-1
-#         for m in 1:M
-#             tuples[(p-1)*M+m] = (m>1 ? m-1 : M, m<M ? m+1 : 1, M + m, m-M).+(p-1)*M
-#         end
-#     end
-#     for m in 1:M
-#         tuples[(length(grid.parallels)-1)*M+m] = (m>1 ? m-1 : M, m<M ? m+1 : 1, m - M).+(length(grid.parallels)-1)*M
-#     end
-#     connec = Meshes.connect.(tuples, Meshes.Ngon)
-#     Meshes.SimpleMesh(Meshes.Point.(pts), connec)
-# end
+    tuples = Vector{Tuple}(undef, length(pts))
+    M = length(grid.meridians)
+    for m in 1:M
+        tuples[m] = (m>1 ? m-1 : M, m<M ? m+1 : 1, M + m)
+    end
+    for p in 2:length(grid.parallels)-1
+        for m in 1:M
+            tuples[(p-1)*M+m] = (m>1 ? m-1 : M, m<M ? m+1 : 1, M + m, m-M).+(p-1)*M
+        end
+    end
+    for m in 1:M
+        tuples[(length(grid.parallels)-1)*M+m] = (m>1 ? m-1 : M, m<M ? m+1 : 1, m - M).+(length(grid.parallels)-1)*M
+    end
+    connec = Meshes.connect.(tuples, Meshes.Ngon)
+    Meshes.SimpleMesh(Meshes.Point.(pts), connec)
+end
 
 function surfaceelements(grid::Grid)
 
