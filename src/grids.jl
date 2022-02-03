@@ -1,4 +1,3 @@
-using GeographicLib
 using NearestNeighbors
 using StaticArrays
 using PyCall
@@ -8,6 +7,7 @@ using LinearAlgebra
 using NLopt
 import Distances.Metric
 using QuadGK
+using Proj4
 
 
 const spatial = PyNULL()
@@ -57,17 +57,17 @@ pointcount(grid::RegularGrid) = length(grid.parallels) * length(grid.meridians)
 
 
 struct EllipsoidalDistance <: Metric
-    ellipsoid::GeographicLib.Geodesic
+    ellipsoid::Proj4.geod_geodesic
 end
 
 function EllipsoidalDistance(a, f)
-    g = Geodesic(a, f)
+    g = Proj4.geod_geodesic(a, f)
 
     EllipsoidalDistance(g)
 end
 
 function (dist::EllipsoidalDistance)(x, y)
-    GeographicLib.Inverse(dist.ellipsoid, x[2] * 180 / pi, x[1] * 180 / pi, y[2] * 180 / pi, y[1] * 180 / pi, GeographicLib.Geodesics.DISTANCE).s12
+    Proj4._geod_inverse(dist.ellipsoid, x * 180 / pi, y * 180 / pi)[1]
 end
 
 struct ApproximateEllipsoidalDistance <: Metric
@@ -314,17 +314,77 @@ function areaweights(grid::Grid)
     fill(4*pi/pointcount(grid), pointcount(grid))
 end
 
+function area(ll, a, f)
+
+    ellipsoid = Proj4.geod_geodesic(a, f)
+    e2 = ellipsoid.f * (2 - ellipsoid.f)
+    e_prime2 = e2 / (1 - e2)
+    n = ellipsoid.f / (2 - ellipsoid.f)
+    c2 = ellipsoid.a^2 * 0.5 + ellipsoid.b^2 * 0.5 * atanh(sqrt(e2)) / sqrt(e2)
+
+    crossings = 0
+    area = 0.0
+    for k in 1:length(ll)
+        p1 = Vector(ll[k])
+        p2 = Vector(ll[(k % length(ll)) + 1])
+
+        _, az1, az2 = Proj4._geod_inverse(ellipsoid, p1 * 180 / pi, p2 * 180 / pi)
+
+        beta1 = geodetic2reduced(p1[2], ellipsoid.f)
+        sin_a0 = sind(az1) * cos(beta1)
+        epsilon = (sqrt(1 + e_prime2 * (1 - sin_a0*sin_a0)) - 1) / (sqrt(1 - e_prime2 * (1 - sin_a0*sin_a0)) + 1)
+
+        C = [ (2/3 - 4/15*n + 8/105*n^2 + 4/315*n^3 + 16/3465*n^4 + 20/9009*n^5) -
+        (1/5 - 16/35*n + 32/105*n^2 - 16/385*n^3 - 64/15015*n^4)*epsilon -
+        (2/105 + 32/315*n - 1088/3465*n^2 + 1184/5005*n^3)*epsilon^2 +
+        (11/315 - 368/3465*n - 32/6435*n^2)*epsilon^3 +
+        (4/1155 + 1088/45045*n)*epsilon^4 + 97/15015*epsilon^5,
+
+        (1/45 - 16/315*n + 32/945*n^2 - 16/3465*n^3 - 64/135135*n^4)*epsilon -
+        (2/105 - 64/945*n + 128/1485*n^2 - 1984/45045*n^3)*epsilon^2 -
+        (1/105 - 16/2079*n - 5792/135135*n^2)*epsilon^3 +
+        (4/1155 - 2944/135135*n)*epsilon^4 + 1/9009*epsilon^5,
+
+        (4/525 - 32/1575*n + 64/3465*n^2 - 32/5005*n^3)*epsilon^2 -
+        (8/1575 - 128/5775*n + 256/6825*n^2)*epsilon^3 -
+        (8/1925 - 1856/225225*n)*epsilon^4 + 8/10725*epsilon^5,
+
+        (8/2205 - 256/24255*n + 512/45045*n^2)*epsilon^3 -
+        (16/8085 - 1024/105105*n)*epsilon^4 - 136/63063*epsilon^5,
+
+        (64/31185 - 512/81081*n)*epsilon^4 - 128/135135*epsilon^5,
+
+        128/99099*epsilon^5]
+
+        sigma1 = atan(sin(geodetic2reduced(p1[2], ellipsoid.f)), cosd(az1) * cos(geodetic2reduced(p1[2], ellipsoid.f)))
+        sigma2 = atan(sin(geodetic2reduced(p2[2], ellipsoid.f)), cosd(az2) * cos(geodetic2reduced(p2[2], ellipsoid.f)))
+
+        I12 = 0.0
+        for l in 0:length(C)-1
+            I12 += C[l+1] * (cos((2*l+1) * sigma2) - cos((2*l+1) * sigma1))
+        end
+        area += c2 * (az2 - az1) * pi / 180 + ellipsoid.a^2 * e2 * sin_a0 * sqrt(1 - sin_a0*sin_a0) * I12
+
+        dlon = p2[1] - p1[1]
+        if p1[1] <= 0 && p2[1] > 0 && atan(sin(dlon), cos(dlon)) > 0
+            crossings += 1
+        elseif p2[1] <= 0 && p1[1] > 0 && atan(sin(dlon), cos(dlon)) < 0
+            crossings -= 1
+        end
+    end
+    area = abs(area)
+    if (crossings & 1) > 0
+        area -= 2 * pi * c2
+    end
+    return area
+end
+
 function computearea(surfacemesh, a, f)
-    g = Geodesic(a, f)
 
     areas = Vector{Float64}(undef, length(elements(surfacemesh)))
     for (k, e) in enumerate(Meshes.elements(surfacemesh))
-        p = GeographicLib.Polygon(g)
-        for v in Meshes.vertices(e)
-            ll, _ = point2geodetic(v.coords, a, f)
-            GeographicLib.add_point!(p, ll[1] * 180 / pi, ll[2] * 180 / pi)
-        end
-        _, _, areas[k] = GeographicLib.properties(p)
+        pts = [point2geodetic(v.coords, a, f)[1] for v in Meshes.vertices(e)]
+        areas[k] = abs(area(pts, a, f))
     end
     return areas
 end
