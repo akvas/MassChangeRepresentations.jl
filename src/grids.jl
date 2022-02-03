@@ -320,8 +320,12 @@ function area(ll, a, f)
     e2 = ellipsoid.f * (2 - ellipsoid.f)
     e_prime2 = e2 / (1 - e2)
     n = ellipsoid.f / (2 - ellipsoid.f)
-    c2 = ellipsoid.a^2 * 0.5 + ellipsoid.b^2 * 0.5 * atanh(sqrt(e2)) / sqrt(e2)
 
+    if ellipsoid.f > 0.0
+        c2 = ellipsoid.a^2 * 0.5 + ellipsoid.b^2 * 0.5 * atanh(sqrt(e2)) / sqrt(e2)
+    else
+        c2 = ellipsoid.a^2
+    end
     crossings = 0
     area = 0.0
     for k in 1:length(ll)
@@ -473,6 +477,8 @@ function surfaceelements(grid::Grid)
 
     metric = ApproximateEllipsoidalDistance(grid.semimajoraxis, grid.flattening)
     opt = Opt(:LN_COBYLA, 2)
+    maxeval!(opt, 100)
+    ftol_abs!(opt, 1)
 
     function optfun(x, grad, p1, p2, p3, metric)
 
@@ -498,19 +504,29 @@ function surfaceelements(grid::Grid)
                 regions[i + 1] = [k]
             end
         end
-        p = sum(pts[[i+1 for i in simplices[k]]]) / length(simplices[k])
-        x0, _ = point2geodetic(p, grid.semimajoraxis, grid.flattening)
-        p1, _ = point2geodetic(pts[simplices[k][1] + 1], grid.semimajoraxis, grid.flattening)
-        p2, _ = point2geodetic(pts[simplices[k][2] + 1], grid.semimajoraxis, grid.flattening)
-        p3, _ = point2geodetic(pts[simplices[k][3] + 1], grid.semimajoraxis, grid.flattening)
 
-        min_objective!(opt, (x,grad) -> optfun(x,grad,p1,p2,p3,metric))
-        maxeval!(opt, 100)
-        ftol_abs!(opt, 1)
-        _, minx, _ = optimize(opt, x0)
-        centroids[k] = geodetic2point(minx, 0, grid.semimajoraxis, grid.flattening)
+        ac = pts[simplices[k][3] + 1]- pts[simplices[k][1] + 1]
+        ab = pts[simplices[k][2] + 1]- pts[simplices[k][1] + 1]
+        abXac = cross(ab, ac)
+
+        p = pts[simplices[k][1] + 1] + (cross(abXac, ab) * radius(ac)^2 + cross(ac, abXac) * radius(ab)^2) / (2 * radius(abXac)^2)
+        if grid.flattening > 0
+
+            x0, _ = point2geodetic(p, grid.semimajoraxis, grid.flattening)
+            p1, _ = point2geodetic(pts[simplices[k][1] + 1], grid.semimajoraxis, grid.flattening)
+            p2, _ = point2geodetic(pts[simplices[k][2] + 1], grid.semimajoraxis, grid.flattening)
+            p3, _ = point2geodetic(pts[simplices[k][3] + 1], grid.semimajoraxis, grid.flattening)
+
+            min_objective!(opt, (x,grad) -> optfun(x,grad,p1,p2,p3,metric))
+
+            _, minx, _ = optimize(opt, x0)
+            centroids[k] = geodetic2point(minx, 0, grid.semimajoraxis, grid.flattening)
+        else
+            centroids[k] = normalize(p) * grid.semimajoraxis
+        end
     end
     tuples = Vector{Tuple}(undef, length(regions))
+    total_area = 0.0
     for k in 1:length(regions)
         idx = regions[k]
         center = pts[k]
@@ -520,7 +536,13 @@ function surfaceelements(grid::Grid)
         n = cross(e, center)
 
         tuples[k] = Tuple([idx[i] for i in sortperm(atan.([dot(c, e) for c in centroids[idx]], [dot(c, n) for c in centroids[idx]]))])
+
+        ll = [point2geodetic(centroids[idx], grid.semimajoraxis, grid.flattening)[1] for idx in tuples[k]]
+        region_area = area(ll, grid.semimajoraxis, grid.flattening)
+        total_area += abs(region_area)
     end
+    R = authalicradius(grid.semimajoraxis, grid.flattening)
+    println(total_area, " ", R^2 * 4 * pi)
 
     connec = Meshes.connect.(tuples, Meshes.Ngon)
     Meshes.SimpleMesh([Meshes.Point(p[1], p[2], p[3]) for p in centroids], connec)
