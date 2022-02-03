@@ -2,7 +2,7 @@ module Constants
 
 using MassChangeRepresentations
 
-const lovenumbers_ce, lovenumbers_cm = MassChangeRepresentations.import_love_numbers()
+const lovenumbers_ce, lovenumbers_cm, lovenumbers_cf = MassChangeRepresentations.import_love_numbers()
 
 function loadlovenumber(a::MassChangeRepresentations.LoveNumbers, degree)
     if degree + 2 <= length(a.kn)
@@ -25,6 +25,8 @@ function loadlovenumber(system::AbstractString, degree)
         return loadlovenumber(lovenumbers_cm, degree)
     elseif system == "CE"
         return loadlovenumber(lovenumbers_ce, degree)
+    elseif system == "CF"
+        return loadlovenumber(lovenumbers_cf, degree)
     end
 end
 
@@ -33,6 +35,8 @@ function deformationlovenumbers(system::AbstractString, degree)
         return deformationlovenumbers(lovenumbers_cm, degree)
     elseif system == "CE"
         return deformationlovenumbers(lovenumbers_ce, degree)
+    elseif system == "CF"
+        return deformationlovenumbers(lovenumbers_cf, degree)
     end
 end
 
