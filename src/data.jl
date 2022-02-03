@@ -27,9 +27,14 @@ function import_love_numbers()
     close(fh)
     lln_ce = LoveNumbers(kn,hn,ln)
     lln_cm = LoveNumbers(copy(kn),copy(hn),copy(ln))
-    lln_cm.kn[2] = -1
-    lln_cm.hn[2] = -1
-    lln_cm.ln[2] = -1
+    lln_cm.kn[2] -= -1
+    lln_cm.hn[2] -= -1
+    lln_cm.ln[2] -= -1
 
-    lln_ce, lln_cm
+    lln_cf = LoveNumbers(copy(kn),copy(hn),copy(ln))
+    lln_cf.hn[2] = 2/3 * (lln_ce.hn[2] - lln_ce.ln[2])
+    lln_cf.ln[2] = -(lln_ce.hn[2] - lln_ce.ln[2]) / 3
+    lln_cf.kn[2] = -lln_ce.hn[2]/3 - 2/3*lln_ce.ln[2]
+
+    lln_ce, lln_cm, lln_cf
 end
