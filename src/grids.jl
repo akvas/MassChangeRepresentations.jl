@@ -22,13 +22,16 @@ const LonLat = SVector{2, Float64}
 const SphericalCoordinates = SVector{3, Float64}
 
 inner(p1::Point, p2::Point) = p1[1]*p2[1] + p1[2]*p2[2] + p1[3]*p2[3]
-radius(p) = sqrt(p[1]*p[1] + p[2]*p[2] + p[3]*p[3])
+radius(p::Point) = sqrt(p[1]*p[1] + p[2]*p[2] + p[3]*p[3])
 cosangle(p::Point, q::Point) = inner(p, q) / (radius(p) * radius(q))
 angle(p::Point, q::Point) = acos(cosangle(p, q))
 
 
 function normalize!(p)
-    p /= radius(p)
+    r = radius(p)
+    @simd for k in 1:length(p)
+        p[k] /= r
+    end
     return p
 end
 
@@ -395,11 +398,20 @@ end
 
 function areaweights(grid::RegularGrid)
 
-    lonedges = vcat(-pi, grid.meridians[1:end-1] + diff(grid.meridians).*0.5, pi)
-    latedges = geodetic2authalic.(vcat(0.5*pi, grid.parallels[1:end-1] + diff(grid.parallels).*0.5, -0.5*pi), Ref(grid.flattening))
-    #latedges = vcat(0.5*pi, grid.parallels[1:end-1] + diff(grid.parallels).*0.5, -0.5*pi)
+    # lonedges = vcat(-pi, grid.meridians[1:end-1] + diff(grid.meridians).*0.5, pi)
+    if grid.meridians[1] < grid.meridians[end]
+        lonedges = vcat(-pi, grid.meridians[1:end-1] .* 0.5 + grid.meridians[2:end] .* 0.5, pi)
+    else
+        lonedges = vcat(pi, grid.meridians[1:end-1] .* 0.5 + grid.meridians[2:end] .* 0.5, -pi)
+    end
+    if grid.parallels[1] < grid.parallels[end]
+        latedges = vcat(-0.5*pi, grid.parallels[1:end-1] .* 0.5 + grid.parallels[2:end] .* 0.5, 0.5*pi)
+    else
+        latedges = vcat(0.5*pi, grid.parallels[1:end-1] .* 0.5 + grid.parallels[2:end] .* 0.5, -0.5*pi)
+    end
+    latedges = geodetic2authalic.(latedges, Ref(grid.flattening))
 
-    vec(diff(lonedges).*transpose(2*sin.(abs.(diff(latedges)*0.5)).*cos.(grid.parallels)))
+    abs.(vec((lonedges[2:end] - lonedges[1:end-1]) * transpose(sin.(latedges[2:end]) - sin.(latedges[1:end-1]))))
 end
 
 function toirregular(grid::RegularGrid)
