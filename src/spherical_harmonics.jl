@@ -147,7 +147,66 @@ function summationfactors(maximum_degree)
     return factors
 end
 
-function legendre_summation(t, factors, coefficients)
+function polynomialfactors(maximum_degree)
+
+    factors = Vector{Float64}(undef, 2*(maximum_degree+1))
+    @simd for n in 2:maximum_degree
+        factors[2*n] = sqrt((2 * n - 1) * (2 * n + 1)) / n
+        factors[2*n+1] = -sqrt((2 * n + 1) / (2 * n - 3)) * (n-1) / n
+    end
+
+    return factors
+end
+
+function legendrepolynomials!(t::Number, factors, Pn)
+
+    Pn[1] = 1
+    if length(Pn) > 1
+        Pn[2] = t * sqrt(3.0)
+    end
+    for n in 2:length(Pn)-1
+        Pn[n + 1] = factors[2*n] * t * Pn[n] + factors[2*n+1] * Pn[n-1]
+    end
+    return Pn
+end
+
+function legendrepolynomials(t::Number, factors)
+    max_degree = Int64(length(factors) / 2 - 1)
+    Pn = Vector{Float64}(undef, max_degree + 1)
+    legendrepolynomials!(t, factors, Pn)
+end
+
+function legendrepolynomials(p, q, factors, reference_radius; regular=false)
+    max_degree = Int64(length(factors) / 2 - 1)
+    Pn = Vector{Float64}(undef, max_degree + 1)
+    legendrepolynomials!(p, q, factors, reference_radius, Pn, regular=regular)
+end
+
+function legendrepolynomials!(p, q, factors, reference_radius, Pn; regular=false)
+
+    max_degree = Int64(length(factors) / 2 - 1)
+
+    t = cosangle(p, q)
+
+    if regular
+        Rr = radius(p) / reference_radius
+        Pn[1] = 1
+    else
+        Rr = reference_radius / radius(p)
+        Pn[1] = Rr
+    end
+
+    if max_degree > 0
+        Pn[2] = Rr * t * sqrt(3.0) * Pn[1]
+    end
+
+    for n in 2:max_degree
+        Pn[n + 1] = factors[2*n] * t * Rr * Pn[n] + factors[2*n+1] * Rr * Rr * Pn[n-1]
+    end
+    return Pn
+end
+
+function legendre_summation(t::Number, factors, coefficients)
 
     b2 = 0.0
     b1 = 0.0
@@ -158,6 +217,29 @@ function legendre_summation(t, factors, coefficients)
     end
 
     coefficients[1] + sqrt(3) * t * b1 - 0.5 * sqrt(5) * b2
+end
+
+function legendre_summation(p, q, factors, coefficients, reference_radius; regular=false)
+
+    t = cosangle(p, q)
+
+    if regular
+        Rr = radius(p) / reference_radius
+        P0 = 1
+    else
+        Rr = reference_radius / radius(p)
+        P0 = Rr
+    end
+
+    b2 = 0.0
+    b1 = 0.0
+    for k in length(coefficients):-1:2
+        bk = coefficients[k] + factors[2*k] * t * Rr * b1 + factors[2*k-1] * b2 * Rr * Rr
+        b2 = b1
+        b1 = bk
+    end
+
+    P0 * coefficients[1] + (P0 * Rr * sqrt(3) * t) * b1 - 0.5 * sqrt(5) * b2 * P0 * Rr * Rr
 end
 
 function synthesis(grid::Grid, coefficients)
