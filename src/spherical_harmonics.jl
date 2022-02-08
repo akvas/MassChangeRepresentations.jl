@@ -1,13 +1,21 @@
 
-export recursionfactors, legendrefunctions!, legendrefunctions, sphericalharmonics!, sphericalharmonics
+export recursionfactors, summationfactors, polynomialfactors
+export legendrefunctions!, legendrefunctions, sphericalharmonics!, sphericalharmonics, legendrepolynomials!, legendrepolynomials
+export quadrature, synthesis, analysis
 
 """
     recursionfactors(maximum_degree)
 
-Compute recursion factors for associated Legendre functions and spherical harmonics.
-
+Compute recursion factors for fully normalized associated Legendre functions and fully normalized (solid) spherical harmonics.
 The factors are stored in a matrix of size ``n_\\text{max}+1 \\times n_\\text{max}+1``.
 
+### Input
+
+- `maximum_degree` -- maximum degree up to which to compute the recursion factors
+
+### Output
+
+- `Fnm` -- matrix containing all required recursion factors
 """
 function recursionfactors(maximum_degree)
 
@@ -38,6 +46,29 @@ function recursionfactors(maximum_degree)
     return F
 end
 
+"""
+    legendrefunctions!(p, F, reference_radius, Pnm; regular=false)
+
+Compute the fully normalized associated Legendre functions `` \\frac{R}{r}^{n+1} P_{nm}(\\cos \\vartheta) `` or
+`` \\frac{r}{R}^n P_{nm}(\\cos \\vartheta)``, evaluated at point `p` ``= (x, y, z)``.
+
+### Input
+
+- `p` -- evaluation point in cartesian coordinates
+- `F` -- precomputed recursion factors (see [`recursionfactors`](@ref))
+- `reference_radius` -- reference radius ``R``
+- `regular` -- (optional, default: `false`) flag whether to compute regular (``(r / R)^n``) or irregular (``(R / r)^(n+1)``) Legendre functions
+
+### Output
+
+- `Pnm` -- fully normalized associated Legendre functions evaluated at ``\\mathbf{p}`` for all degrees and orders
+
+### Algorithm
+
+The fully normalized Legendre functions are computed by orderwise recursion.
+
+
+"""
 function legendrefunctions!(p, F, reference_radius, Pnm; regular=false)
 
     maximum_degree = size(F, 1) - 1
