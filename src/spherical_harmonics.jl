@@ -49,24 +49,24 @@ end
 """
     legendrefunctions!(p, F, reference_radius, Pnm; regular=false)
 
-Compute the fully normalized associated Legendre functions `` \\frac{R}{r}^{n+1} P_{nm}(\\cos \\vartheta) `` or
-`` \\frac{r}{R}^n P_{nm}(\\cos \\vartheta)``, evaluated at point `p` ``= (x, y, z)``.
+Compute the fully normalized associated Legendre functions ``P_{nm}^{(i)} = \\left(\\frac{R}{r}\\right)^{n+1} P_{nm}(\\cos \\vartheta) `` or
+``P_{nm}^{(r)} =\\left(\\frac{r}{R}\\right)^n P_{nm}(\\cos \\vartheta)`` evaluated at point `p` ``= (x, y, z)``, where ``r = \\sqrt{x^2+y^2+z^2}``
+and ``\\cos \\vartheta = \\frac{z}{r}``.
 
 ### Input
 
 - `p` -- evaluation point in cartesian coordinates
 - `F` -- precomputed recursion factors (see [`recursionfactors`](@ref))
 - `reference_radius` -- reference radius ``R``
-- `regular` -- (optional, default: `false`) flag whether to compute regular (``(r / R)^n``) or irregular (``(R / r)^(n+1)``) Legendre functions
+- `regular` -- (optional, default: `false`) flag whether to compute regular ``(r / R)^n`` or irregular ``(R / r)^{(n+1)}`` Legendre functions
 
 ### Output
 
-- `Pnm` -- fully normalized associated Legendre functions evaluated at ``\\mathbf{p}`` for all degrees and orders
+- `Pnm` -- fully normalized associated Legendre functions evaluated at `p` for all degrees and orders; each function ``P_{nm}^{(r/i)}`` can be accessed by `Pnm[n + 1, m + 1]`
 
-### Algorithm
+### Notes
 
-The fully normalized Legendre functions are computed by orderwise recursion.
-
+The output array `Pnm` must be preallocated with at least `size(F)`, and its contents are overwritten after the function call.
 
 """
 function legendrefunctions!(p, F, reference_radius, Pnm; regular=false)
@@ -104,6 +104,34 @@ function legendrefunctions!(p, F, reference_radius, Pnm; regular=false)
     return Pnm
 end
 
+"""
+    sphericalharmonics!(p, F, reference_radius, Ynm; regular=false)
+
+Compute the fully normalized solid spherical harmonics
+``C_{nm}^{(i)} = \\left(\\frac{R}{r}\\right)^{n+1} P_{nm}(\\cos \\vartheta) \\cos m \\lambda``,
+``S_{nm}^{(i)} = \\left(\\frac{R}{r}\\right)^{n+1} P_{nm}(\\cos \\vartheta) \\sin m \\lambda``
+or
+``C_{nm}^{(r)} = \\left(\\frac{r}{R}\\right)^{n} P_{nm}(\\cos \\vartheta) \\cos m \\lambda``,
+``S_{nm}^{(r)} = \\left(\\frac{r}{R}\\right)^{n} P_{nm}(\\cos \\vartheta) \\sin m \\lambda``
+evaluated at point `p` ``= (x, y, z)``, where ``r = \\sqrt{x^2+y^2+z^2}``,
+``\\cos \\vartheta = \\frac{z}{r}``, and ``\\lambda = \\arctan{\\frac{y}{x}}``.
+
+### Input
+
+- `p` -- evaluation point in cartesian coordinates
+- `F` -- precomputed recursion factors (see [`recursionfactors`](@ref))
+- `reference_radius` -- reference radius ``R``
+- `regular` -- (optional, default: `false`) flag whether to compute regular ``(r / R)^n`` or irregular ``(R / r)^{(n+1)}`` Legendre functions
+
+### Output
+
+- `Ynm` -- fully normalized solid spherical harmonics evaluated at `p` for all degrees and orders; each cosine function ``C_{nm}^{(r/i)}`` can be accessed by `Ynm[n + 1, m + 1]`, each sine function ``S_{nm}^{(r/i)}`` can be accessed by `Ynm[n - m + 1, maximum_degree + 2 - m]`
+
+### Notes
+
+The output array `Ynm` must be preallocated with at least `size(F)`, and its contents are overwritten after the function call.
+
+"""
 function sphericalharmonics!(p, F, reference_radius, Ynm; regular=false)
 
     maximum_degree = size(F,1)-1
